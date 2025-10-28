@@ -1,0 +1,208 @@
+#!/bin/bash
+# Forensic Readiness Setup Script for AWS S3 and CloudTrail
+# Complete environment setup for coursework incident response scenario
+
+set -e  # Exit on any error
+
+echo "================================================"
+echo "FORENSIC READINESS SETUP - S3 & CLOUDTRAIL"
+echo "================================================"
+
+# Get account ID for unique bucket names
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo "AWS Account ID: $ACCOUNT_ID"
+
+# Generate unique bucket names with timestamp
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+DATA_BUCKET="forensic-data-${ACCOUNT_ID}-${TIMESTAMP}"
+LOG_BUCKET="cloudtrail-logs-${ACCOUNT_ID}-${TIMESTAMP}"
+TRAIL_NAME="forensic-trail-${TIMESTAMP}"
+
+echo "Using unique resource names:"
+echo "Data Bucket: $DATA_BUCKET"
+echo "Log Bucket: $LOG_BUCKET"
+echo "Trail Name: $TRAIL_NAME"
+echo ""
+
+# ================================================
+# 1. CREATE S3 BUCKETS
+# ================================================
+echo "1. CREATING S3 BUCKETS..."
+
+echo "Creating data bucket: $DATA_BUCKET"
+aws s3api create-bucket --bucket $DATA_BUCKET --region us-east-1
+
+echo "Creating log bucket: $LOG_BUCKET"
+aws s3api create-bucket --bucket $LOG_BUCKET --region us-east-1
+
+echo "✅ S3 buckets created successfully"
+echo ""
+
+# ================================================
+# 2. ENABLE VERSIONING ON DATA BUCKET
+# ================================================
+echo "2. ENABLING VERSIONING ON DATA BUCKET..."
+
+aws s3api put-bucket-versioning \
+    --bucket $DATA_BUCKET \
+    --versioning-configuration Status=Enabled
+
+echo "✅ Versioning enabled on $DATA_BUCKET"
+echo ""
+
+# ================================================
+# 3. CONFIGURE CLOUDTRAIL BUCKET POLICY
+# ================================================
+echo "3. CONFIGURING CLOUDTRAIL BUCKET POLICY..."
+
+cat > /tmp/cloudtrail-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AWSCloudTrailAclCheck",
+            "Effect": "Allow",
+            "Principal": {"Service": "cloudtrail.amazonaws.com"},
+            "Action": "s3:GetBucketAcl",
+            "Resource": "arn:aws:s3:::$LOG_BUCKET"
+        },
+        {
+            "Sid": "AWSCloudTrailWrite",
+            "Effect": "Allow",
+            "Principal": {"Service": "cloudtrail.amazonaws.com"},
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::$LOG_BUCKET/AWSLogs/$ACCOUNT_ID/*",
+            "Condition": {
+                "StringEquals": {
+                    "s3:x-amz-acl": "bucket-owner-full-control"
+                }
+            }
+        }
+    ]
+}
+EOF
+
+aws s3api put-bucket-policy --bucket $LOG_BUCKET --policy file:///tmp/cloudtrail-policy.json
+echo "✅ CloudTrail bucket policy applied"
+echo ""
+
+# ================================================
+# 4. CREATE AND CONFIGURE CLOUDTRAIL TRAIL
+# ================================================
+echo "4. SETTING UP CLOUDTRAIL TRAIL..."
+
+# Create the trail
+echo "Creating CloudTrail trail: $TRAIL_NAME"
+aws cloudtrail create-trail \
+    --name $TRAIL_NAME \
+    --s3-bucket-name $LOG_BUCKET \
+    --is-multi-region-trail
+
+# Start logging
+echo "Starting CloudTrail logging..."
+aws cloudtrail start-logging --name $TRAIL_NAME
+
+# Enable data events for S3 operations
+echo "Enabling S3 data events..."
+aws cloudtrail put-event-selectors \
+    --trail-name $TRAIL_NAME \
+    --event-selectors '[{
+        "ReadWriteType": "All",
+        "IncludeManagementEvents": true,
+        "DataResources": [{
+            "Type": "AWS::S3::Object",
+            "Values": ["arn:aws:s3:::'$DATA_BUCKET'/"]
+        }]
+    }]'
+
+# Enable log file integrity validation
+echo "Enabling log file integrity validation..."
+aws cloudtrail update-trail --name $TRAIL_NAME --enable-log-file-validation
+
+echo "✅ CloudTrail trail configured with data events and integrity validation"
+echo ""
+
+# ================================================
+# 5. ENABLE S3 SERVER ACCESS LOGGING (OPTIONAL)
+# ================================================
+echo "5. ENABLING S3 SERVER ACCESS LOGGING..."
+
+aws s3api put-bucket-logging \
+    --bucket $DATA_BUCKET \
+    --bucket-logging-status '{
+        "LoggingEnabled": {
+            "TargetBucket": "'$LOG_BUCKET'",
+            "TargetPrefix": "s3-server-access-logs/'$DATA_BUCKET'/"
+        }
+    }'
+
+echo "✅ Server access logging enabled on $DATA_BUCKET"
+echo ""
+
+# ================================================
+# 6. VERIFICATION AND STATUS CHECK
+# ================================================
+echo "6. VERIFYING SETUP..."
+
+echo "CloudTrail Trail Status:"
+aws cloudtrail get-trail-status --name $TRAIL_NAME
+
+echo -e "\nEvent Selectors Configuration:"
+aws cloudtrail get-event-selectors --trail-name $TRAIL_NAME
+
+echo -e "\nBucket Versioning Status:"
+aws s3api get-bucket-versioning --bucket $DATA_BUCKET
+
+echo -e "\nLog File Validation Status:"
+aws cloudtrail describe-trails --trail-name-list $TRAIL_NAME --query 'trailList[0].LogFileValidationEnabled'
+
+echo -e "\nS3 Buckets Created:"
+aws s3 ls | grep -E "$DATA_BUCKET|$LOG_BUCKET"
+
+echo ""
+echo "================================================"
+echo "FORENSIC READINESS SETUP COMPLETE!"
+echo "================================================"
+echo ""
+echo "RESOURCE SUMMARY:"
+echo "================="
+echo "Data Bucket (with versioning): $DATA_BUCKET"
+echo "Log Bucket (secure storage):   $LOG_BUCKET"
+echo "CloudTrail Trail:              $TRAIL_NAME"
+echo ""
+echo "FEATURES ENABLED:"
+echo "================="
+echo "✅ S3 Versioning - Object history preservation"
+echo "✅ CloudTrail Management Events - Control-plane operations"
+echo "✅ CloudTrail Data Events - S3 API actions (GetObject, PutObject, etc.)"
+echo "✅ Multi-Region Trail - Cross-region visibility"
+echo "✅ Log File Integrity Validation - Tamper detection"
+echo "✅ S3 Server Access Logging - Request-level details"
+echo "✅ Secure Log Storage - Dedicated bucket with proper policies"
+echo ""
+echo "NEXT STEPS:"
+echo "==========="
+echo "1. Upload test files to: s3://$DATA_BUCKET"
+echo "2. Perform simulated incident activities"
+echo "3. Download logs from: s3://$LOG_BUCKET"
+echo "4. Analyze CloudTrail and server access logs"
+echo ""
+echo "To verify log delivery, run after some activity:"
+echo "aws s3 ls s3://$LOG_BUCKET/AWSLogs/$ACCOUNT_ID/ --recursive | head -10"
+echo "===========================================
+How to Use This Script:
+1. Save the script:
+bash
+# Save as forensic-readiness-setup.sh
+nano forensic-readiness-setup.sh
+# Copy and paste the entire script above
+2. Make it executable:
+bash
+chmod +x forensic-readiness-setup.sh
+3. Run the script:
+bash
+./forensic-readiness-setup.sh
+
+From <https://chat.deepseek.com/a/chat/s/3ddf67b7-0572-42ab-b317-7c97669f2bdc> 
+
+====="
