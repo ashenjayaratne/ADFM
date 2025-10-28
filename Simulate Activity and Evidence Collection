@@ -1,0 +1,25 @@
+# Make sure you're in the right directory and using your actual bucket name
+DATA_BUCKET="forensic-data-393144226255-20251027-104422"  # REPLACE WITH YOUR BUCKET
+
+echo "=== Creating multiple file versions ==="
+
+# 1. Create initial file
+echo "COMPANY CONFIDENTIAL - Q1 2024 Financial Report" > Datacenter credentials - A.pdf
+aws s3 cp confidential.pdf s3://$DATA_BUCKET/
+echo "✅ Version 1 uploaded: $(date)"
+
+# 2. First modification (wait a few seconds between versions)
+sleep 5
+echo "COMPANY CONFIDENTIAL - Q1 2024 Financial Report - V2 UPDATED" > Datacenter credentials - A.pdf
+aws s3 cp confidential.pdf s3://$DATA_BUCKET/
+echo "✅ Version 2 uploaded: $(date)"
+
+# 3. Second modification  
+sleep 5
+echo "COMPANY CONFIDENTIAL - Q1 2024 Financial Report - V3 FINAL" > Datacenter credentials - A.pdf
+aws s3 cp confidential.pdf s3://$DATA_BUCKET/
+echo "✅ Version 3 uploaded: $(date)"
+
+# 4. Verify versions were created
+echo "=== Checking version history ==="
+aws s3api list-object-versions --bucket $DATA_BUCKET --prefix Datacenter credentials - A.pdf
